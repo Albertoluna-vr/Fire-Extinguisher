@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrenador de Extintores XR</title>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<style>
+:root{color-scheme:dark;--red:#d7261e;--yel:#ffc20e;--grn:#1f9d55}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#15171a;color:#eceef0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+#stage{position:fixed;inset:0}
+#stage canvas{display:block;width:100%;height:100%;touch-action:none}
+#start{position:fixed;inset:0;overflow:auto;background:rgba(17,18,20,.94);padding:clamp(16px,4vw,48px)}
+#start.off{display:none}
+.wrap{max-width:900px;margin:auto}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.05;margin:0 0 8px}
+h2{font-size:22px;margin:28px 0 8px}
+.lead{color:#b9bec4;max-width:62ch}
+.bar{height:8px;background:var(--red);width:90px;border-radius:4px;margin-bottom:18px}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}
+button{font:600 16px system-ui,sans-serif;min-height:48px;padding:0 18px;border-radius:10px;border:2px solid transparent;cursor:pointer}
+button:focus-visible{outline:3px solid var(--yel);outline-offset:2px}
+.pri{background:var(--yel);color:#15171a}.sec{background:#2a2e33;color:#eceef0}
+button:disabled{opacity:.45;cursor:not-allowed}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #2c3035;vertical-align:top}
+th{color:#9aa0a6;font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.note{font-size:14px;color:#9aa0a6}
+#support{font-size:14px;color:#ffcf5a;min-height:1.5em}
+#menuBtn{position:fixed;top:12px;left:12px;z-index:2;display:none}
+#tip{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);padding:8px 14px;border-radius:8px;font-size:14px;display:none;text-align:center;max-width:94vw}
+.who{font:16px system-ui;min-height:44px;padding:0 12px;border-radius:8px;border:1px solid #3a3f45;background:#1d2024;color:#eceef0}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<button id="menuBtn" class="sec">Menú</button>
+<div id="tip">Vista previa: mueve el mouse para apuntar · mantén clic para apretar · P pasador · W/S caminar · B recolocar fuego</div>
+
+<div id="start">
+  <div class="wrap">
+    <div class="bar"></div>
+    <h1>Entrenador de extintores XR</h1>
+    <p class="lead">Ponte el Meta Quest, elige el extintor correcto para cada fuego y apágalo con la técnica PASS. El control del Quest es tu extintor.</p>
+    <div class="btns">
+      <button class="pri" id="bAR" disabled>Realidad mixta (passthrough)</button>
+      <button class="sec" id="bVR" disabled>Realidad virtual</button>
+      <button class="sec" id="bPrev">Vista previa en esta pantalla</button>
+    </div>
+    <div id="support">Revisando soporte de WebXR…</div>
+
+    <h2>Controles del Quest</h2>
+    <table>
+      <tr><th>Acción PASS</th><th>Control</th></tr>
+      <tr><td><b>Pull</b>: jalar el pasador</td><td>Botón <b>A</b> (derecho) o <b>X</b> (izquierdo)</td></tr>
+      <tr><td><b>Aim</b>: apuntar a la base</td><td>Apunta con el control derecho. El círculo amarillo muestra a dónde va el chorro.</td></tr>
+      <tr><td><b>Squeeze</b>: apretar la palanca</td><td><b>Gatillo</b>. Apretar a medias da medio flujo.</td></tr>
+      <tr><td><b>Sweep</b>: barrer</td><td>Mueve el control de lado a lado sobre la base del fuego</td></tr>
+      <tr><td>Distancia</td><td>Camina de verdad. El panel te dice si estás muy cerca o muy lejos.</td></tr>
+      <tr><td>Menús</td><td>Apunta al botón y aprieta el gatillo</td></tr>
+      <tr><td>Recolocar el fuego</td><td>Botón <b>B</b> o <b>Y</b>: lo pone 3.5 m frente a ti</td></tr>
+    </table>
+    <p class="note">Necesitas un espacio libre de unos 3 × 4 m y el límite del Guardian activado. Herramienta de entrenamiento: no sustituye la práctica con fuego real que exija tu empresa o la normativa.</p>
+
+    <h2>Resultados de la sesión</h2>
+    <div class="btns" style="margin:8px 0 12px"><input class="who" id="who" placeholder="Nombre del participante" aria-label="Nombre del participante"><button class="sec" id="copy">Copiar resultados</button><button class="sec" id="clear">Borrar</button></div>
+    <table><thead><tr><th>Participante</th><th>Escenario</th><th>Decisión</th><th>Resultado</th><th>Puntos</th></tr></thead><tbody id="logB"></tbody></table>
+    <p class="note" id="logEmpty">Aún no hay intentos.</p>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+// ---------------- data ----------------
+const FT = 0.3048;
+const EXT = [
+  {id:'water',name:'Agua (APW)',cls:'A',col:[0.45,0.7,1],body:'#b9c0c6',dur:16,range:[6,12],kind:'water'},
+  {id:'foam',name:'Espuma (AFFF)',cls:'A · B',col:[0.96,0.96,0.92],body:'#d7261e',dur:14,range:[6,12],kind:'foam'},
+  {id:'co2',name:'Dióxido de carbono',cls:'B · C',col:[0.88,0.92,0.96],body:'#d7261e',dur:9,range:[3,8],kind:'co2'},
+  {id:'abc',name:'Polvo químico ABC',cls:'A · B · C',col:[1,0.97,0.86],body:'#d7261e',dur:12,range:[6,10],kind:'powder'},
+  {id:'wet',name:'Químico húmedo (K)',cls:'K · A',col:[0.8,0.9,1],body:'#c9ced3',dur:14,range:[6,10],kind:'water'},
+  {id:'d',name:'Polvo Clase D',cls:'D',col:[0.94,0.92,0.86],body:'#e2b400',dur:14,range:[4,8],kind:'powder'}
+];
+const SC = [
+  {id:'bin',t:'Bote de basura en oficina',d:'Un bote de basura lleno de papel se está quemando junto a un escritorio. El fuego llega a la rodilla, la puerta está detrás de ti y un compañero ya activó la alarma.',fx:{water:'ok',foam:'ok',co2:'weak',abc:'ok',wet:'ok',d:'weak'},base:0.4,w:0.42},
+  {id:'fuel',t:'Derrame de combustible',d:'Gasolina derramada de un bidón se encendió en el piso del taller. El charco es pequeño y aún no se extiende. La puerta detrás de ti está abierta.',fx:{water:'danger',foam:'ok',co2:'ok',abc:'ok',wet:'weak',d:'weak'},base:0.03,w:1.0},
+  {id:'panel',t:'Tablero eléctrico',d:'Salen llamas y chispas de la parte baja de un tablero eléctrico energizado. No se puede llegar al interruptor con seguridad. La salida está detrás de ti.',fx:{water:'danger',foam:'danger',co2:'ok',abc:'ok',wet:'danger',d:'weak'},base:0.32,w:0.6},
+  {id:'fryer',t:'Freidora',d:'El aceite de una freidora comercial se incendió. La supresión de la campana no se activó. Ya cerraste el gas de la freidora.',fx:{water:'danger',foam:'danger',co2:'weak',abc:'weak',wet:'ok',d:'weak'},base:0.9,w:0.44},
+  {id:'metal',t:'Virutas de magnesio',d:'Un montón de virutas de magnesio bajo un centro de maquinado arde al rojo blanco. El fuego es pequeño y está contenido en el montón.',fx:{water:'danger',foam:'danger',co2:'danger',abc:'weak',wet:'danger',d:'ok'},base:0.06,w:0.5},
+  {id:'big',t:'Cuarto de almacén',d:'Cajas de cartón en un almacén están ardiendo. Las llamas llegan al techo y el humo está bajando hacia el piso.',fx:{water:'danger',foam:'danger',co2:'danger',abc:'danger',wet:'danger',d:'danger'},base:0.3,w:1.6,big:1}
+];
+const WHY = {
+  'fuel-water':'El agua se hunde bajo la gasolina y la salpica, extendiendo el combustible en llamas por el piso.',
+  'panel-water':'El agua conduce electricidad. Rociar un tablero energizado hace pasar corriente por el chorro hasta ti.',
+  'panel-foam':'La espuma es a base de agua y conduce electricidad. No está clasificada para equipo eléctrico energizado.',
+  'panel-wet':'El químico húmedo es a base de agua y conduce electricidad. No está clasificado para equipo energizado.',
+  'fryer-water':'El agua se convierte en vapor bajo el aceite caliente y lanza una bola de aceite en llamas fuera de la freidora.',
+  'fryer-foam':'La espuma es casi toda agua. En una freidora provoca desbordamiento violento y salpicaduras.',
+  'metal-water':'El agua reacciona violentamente con el magnesio en llamas, libera hidrógeno y lanza metal fundido.',
+  'metal-foam':'La espuma es a base de agua y reacciona violentamente con el magnesio en llamas.',
+  'metal-co2':'El magnesio sigue ardiendo en CO₂: le quita el oxígeno.',
+  'metal-wet':'El químico húmedo es a base de agua y reacciona violentamente con el metal en llamas.',
+  big:'Este fuego ya no es incipiente. Llamas en el techo y humo bajando significan: sal, cierra la puerta y deja que los bomberos lo atiendan. Ningún extintor portátil es la respuesta correcta.',
+  weak:{co2:'El CO₂ apaga las llamas pero no enfría ni deja residuo, así que el combustible caliente se vuelve a encender.',abc:'El polvo químico apaga las llamas pero no enfría el aceite ni forma una capa, así que se reaviva. Usa Clase K.',d:'El polvo Clase D es solo para fuegos de metales. Casi no afecta este fuego.',wet:'El químico húmedo está diseñado para aceites de cocina, no para líquidos inflamables como gasolina.'}
+};
+
+// ---------------- three setup ----------------
+const $ = s => document.querySelector(s);
+const V3 = THREE.Vector3, UP = new V3(0,1,0);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+$('#stage').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const BG = new THREE.Color(0x23272c);
+scene.background = BG;
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.05, 60);
+camera.position.set(0, 1.6, 0);
+addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 0.9); sun.position.set(1.5, 3, 2); scene.add(sun);
+const fireLight = new THREE.PointLight(0xff8a30, 0, 9, 1.6); scene.add(fireLight);
+const M = (c, o={}) => new THREE.MeshStandardMaterial(Object.assign({color:c, roughness:.65}, o));
+
+// virtual room (VR and preview only)
+const room = new THREE.Group(); scene.add(room);
+{
+  const fl = new THREE.Mesh(new THREE.PlaneGeometry(14,14), M(0x5d5b57)); fl.rotation.x = -Math.PI/2; room.add(fl);
+  const grid = new THREE.GridHelper(14, 14, 0x777570, 0x6a6864); grid.position.y = 0.002; room.add(grid);
+  const walls = new THREE.Mesh(new THREE.BoxGeometry(14, 3.2, 14), M(0x9a968e, {side:THREE.BackSide})); walls.position.y = 1.59; room.add(walls);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.18), new THREE.MeshBasicMaterial({color:0x1c8c46})); sign.position.set(0, 2.4, 6.98); sign.rotation.y = Math.PI; room.add(sign);
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.1), M(0x76808a)); door.position.set(0, 1.05, 6.98); door.rotation.y = Math.PI; room.add(door);
+}
+
+// fire object group
+const fireG = new THREE.Group(); scene.add(fireG);
+const objG = new THREE.Group(); fireG.add(objG);
+const shadow = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshBasicMaterial({color:0, transparent:true, opacity:.35, depthWrite:false}));
+shadow.rotation.x = -Math.PI/2; shadow.position.y = 0.004; fireG.add(shadow);
+fireG.position.set(0, 0, -3.5);
+
+function buildObj(sc) {
+  objG.clear();
+  const add = (geo, mat, x, y, z, ry=0, rz=0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x,y,z); m.rotation.y = ry; m.rotation.z = rz; objG.add(m); return m; };
+  shadow.scale.setScalar(sc.w * 0.75);
+  if (sc.id === 'bin') {
+    add(new THREE.CylinderGeometry(0.2, 0.16, 0.42, 28, 1, true), M(0x8d959d, {metalness:.3, roughness:.45, side:THREE.DoubleSide}), 0, 0.21, 0);
+    add(new THREE.CircleGeometry(0.19, 28), M(0x2a2622), 0, 0.37, 0).rotation.x = -Math.PI/2;
+    add(new THREE.BoxGeometry(1.2, 0.04, 0.6), M(0x9b8f7c), -0.9, 0.74, -0.4);
+    for (const x of [-1.45, -0.35]) add(new THREE.BoxGeometry(0.04, 0.72, 0.55), M(0x555555), x, 0.36, -0.4);
+  } else if (sc.id === 'fuel') {
+    add(new THREE.CircleGeometry(0.55, 40), M(0x15130f, {roughness:.15}), 0, 0.008, 0).rotation.x = -Math.PI/2;
+    add(new THREE.BoxGeometry(0.2, 0.3, 0.36), M(0xb8231c), 0.62, 0.1, 0.15, 0.4, Math.PI/2);
+  } else if (sc.id === 'panel') {
+    add(new THREE.BoxGeometry(0.7, 1.6, 0.4), M(0x8f979e, {metalness:.4}), 0, 0.8, -0.25);
+    add(new THREE.BoxGeometry(0.6, 1.0, 0.02), M(0x6c737a, {metalness:.4}), 0, 1.0, -0.04);
+    add(new THREE.PlaneGeometry(0.16, 0.14), new THREE.MeshBasicMaterial({color:0xffc20e}), 0, 1.3, -0.025);
+    for (const x of [-0.2, 0.2]) add(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 10), M(0x333333), x, 2.4, -0.3);
+  } else if (sc.id === 'fryer') {
+    add(new THREE.BoxGeometry(0.5, 0.88, 0.6), M(0xc9ced3, {metalness:.3, roughness:.35}), 0, 0.44, -0.1);
+    add(new THREE.PlaneGeometry(0.44, 0.4), M(0x4a3a12, {roughness:.2}), 0, 0.885, -0.1).rotation.x = -Math.PI/2;
+    for (const x of [-0.6, 0.6]) add(new THREE.BoxGeometry(0.66, 0.9, 0.6), M(0xaeb4ba, {metalness:.3, roughness:.4}), x, 0.45, -0.1);
+  } else if (sc.id === 'metal') {
+    for (let i = 0; i < 40; i++) add(new THREE.BoxGeometry(0.05, 0.015, 0.02), M(0x9aa1a7, {metalness:.9, roughness:.3}), Math.sin(i*7.3)*0.24, 0.01 + Math.abs(Math.cos(i*3.1))*0.05, Math.cos(i*5.1)*0.14, i);
+    add(new THREE.BoxGeometry(1.4, 1.6, 0.9), M(0x3d6b8f, {metalness:.3}), 0, 0.8, -0.9);
+  } else {
+    let k = 0;
+    for (let x = -0.7; x <= 0.71; x += 0.47) for (let y = 0; y < 3; y++) add(new THREE.BoxGeometry(0.44, 0.38, 0.44), M([0xa77b4c,0x8f6a40,0xb48a58][k++%3]), x, 0.19 + y*0.39, -0.2, (k%5)*0.05);
+  }
+}
+
+// ---------------- billboard particles ----------------
+function particles(max, blending) {
+  const base = new THREE.PlaneGeometry(1, 1);
+  const g = new THREE.InstancedBufferGeometry();
+  g.index = base.index; g.setAttribute('position', base.getAttribute('position')); g.setAttribute('uv', base.getAttribute('uv'));
+  const pos = new Float32Array(max*3), size = new Float32Array(max), col = new Float32Array(max*4);
+  const aP = new THREE.InstancedBufferAttribute(pos, 3), aS = new THREE.InstancedBufferAttribute(size, 1), aC = new THREE.InstancedBufferAttribute(col, 4);
+  for (const a of [aP, aS, aC]) a.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute('iPos', aP); g.setAttribute('iSize', aS); g.setAttribute('iCol', aC); g.instanceCount = 0;
+  const mat = new THREE.ShaderMaterial({transparent:true, depthWrite:false, blending,
+    vertexShader:`attribute vec3 iPos;attribute float iSize;attribute vec4 iCol;varying vec2 vUv;varying vec4 vCol;
+      void main(){vUv=uv;vCol=iCol;vec4 mv=modelViewMatrix*vec4(iPos,1.0);mv.xy+=position.xy*iSize;gl_Position=projectionMatrix*mv;}`,
+    fragmentShader:`varying vec2 vUv;varying vec4 vCol;
+      void main(){float d=length(vUv-0.5)*2.0;float a=smoothstep(1.0,0.0,d);a*=a;if(vCol.a*a<0.004)discard;gl_FragColor=vec4(vCol.rgb,vCol.a*a);}`});
+  const mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; scene.add(mesh);
+  return {list:[], max, flush(fn) {
+    let n = 0;
+    for (const p of this.list) { if (n >= max) break; const r = fn(p); pos[n*3]=p.x; pos[n*3+1]=p.y; pos[n*3+2]=p.z; size[n]=r[0]; col.set(r[1], n*4); n++; }
+    g.instanceCount = n; aP.needsUpdate = aS.needsUpdate = aC.needsUpdate = true;
+  }};
+}
+const FIRE = particles(1800, THREE.AdditiveBlending);
+const SPRAY = particles(900, THREE.NormalBlending);
+const SMOKE = particles(400, THREE.NormalBlending);
+
+// ---------------- canvas panels ----------------
+const ray = new THREE.Raycaster();
+class Panel {
+  constructor(wpx, hpx, wm) {
+    this.c = document.createElement('canvas'); this.c.width = wpx; this.c.height = hpx; this.x = this.c.getContext('2d');
+    this.tex = new THREE.CanvasTexture(this.c); this.tex.colorSpace = THREE.SRGBColorSpace;
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(wm, wm*hpx/wpx), new THREE.MeshBasicMaterial({map:this.tex, transparent:true}));
+    this.mesh.renderOrder = 10; this.btns = []; this.hover = null; scene.add(this.mesh);
+  }
+  hit(o, d) {
+    if (!this.mesh.visible) return null;
+    ray.set(o, d); const h = ray.intersectObject(this.mesh)[0]; if (!h) return null;
+    const px = h.uv.x*this.c.width, py = (1-h.uv.y)*this.c.height;
+    return {pt:h.point, b:this.btns.find(b => px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) || null};
+  }
+}
+function rr(x, X, Y, w, h, r, fill) { x.beginPath(); x.roundRect(X, Y, w, h, r); x.fillStyle = fill; x.fill(); }
+function wrapText(x, text, X, Y, maxW, lh) {
+  const words = text.split(' '); let line = '';
+  for (const w of words) { const t = line ? line + ' ' + w : w; if (x.measureText(t).width > maxW && line) { x.fillText(line, X, Y); line = w; Y += lh; } else line = t; }
+  if (line) x.fillText(line, X, Y); return Y + lh;
+}
+const menu = new Panel(1024, 820, 1.15);
+const hud = new Panel(820, 470, 1.0);
+hud.mesh.visible = false;
+
+// ---------------- state ----------------
+let scIdx = 0, sc = SC[0], st = {};
+let mode = 'preview', previewOn = false, needPlace = false, frameN = 0;
+let log = []; try { log = JSON.parse(localStorage.getItem('xrfet-log') || '[]'); } catch (e) {}
+const N = 11;
+
+function newState() {
+  st = {phase:'brief', cells:Array.from({length:N}, (_, k) => 0.55 + 0.45*Math.sin(k/(N-1)*Math.PI)), pin:false, agent:1, heat:0,
+        sprayT:0, okDist:0, base:0, sweeps:0, dir:0, lastU:null, pinMiss:false, sprayed:false, watch:0, emptyT:0, needIn:false,
+        flare:false, flareT:0, msg:'', msgT:0, spraying:false, flow:0, dist:0, aimPt:null};
+}
+function say(t, s=2.4) { st.msg = t; st.msgT = s; }
+function start(i) {
+  scIdx = (i + SC.length) % SC.length; sc = SC[scIdx]; newState(); buildObj(sc);
+  FIRE.list.length = 0; SPRAY.list.length = 0; SMOKE.list.length = 0;
+  hud.mesh.visible = false; drawBrief(); menu.mesh.visible = true; placeMenu();
+}
+function choose(id) {
+  if (id === 'evac') {
+    st.choice = 'Evacuar';
+    return finish(sc.big
+      ? {res:'pass', score:100, head:'Decisión correcta', why:'Activa la alarma, llama al 911, cierra la puerta detrás de ti para frenar el fuego y ve al punto de reunión. Combatir este fuego te habría atrapado.'}
+      : {res:'safe', score:60, head:'Seguro, pero se podía combatir', why:'Salir nunca es un error. Este fuego era pequeño, estaba contenido y había un extintor adecuado, así que una persona capacitada podía apagarlo con seguridad.'});
+  }
+  st.ext = EXT.find(e => e.id === id); st.fx = sc.fx[id]; st.choice = st.ext.name; st.phase = 'fight';
+  menu.mesh.visible = false; hud.mesh.visible = true;
+  say(renderer.xr.isPresenting ? 'Jala el pasador: botón A o X' : 'Jala el pasador: tecla P', 4);
+}
+function pull() { if (st.phase !== 'fight' || st.pin) return; st.pin = true; say('Pasador fuera. Camina a una distancia segura y apunta a la base.', 3); buzz(0.6, 80); }
+
+// ---------------- helpers: head, pointer, controllers ----------------
+const tmpQ = new THREE.Quaternion();
+function headPos() { if (renderer.xr.isPresenting) { const c = renderer.xr.getCamera(); return new V3().setFromMatrixPosition(c.matrixWorld); } return camera.position.clone(); }
+function headFwd() {
+  const c = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const f = new V3(0, 0, -1).applyQuaternion(c.getWorldQuaternion(tmpQ)); f.y = 0;
+  if (f.lengthSq() < 1e-4) f.set(0, 0, -1); return f.normalize();
+}
+function placeFire() { const h = headPos(), f = headFwd(); fireG.position.set(h.x + f.x*3.5, 0, h.z + f.z*3.5); }
+function placeMenu() {
+  const h = headPos(), f = headFwd();
+  menu.mesh.position.set(h.x + f.x*1.3, Math.max(1.0, h.y - 0.15), h.z + f.z*1.3);
+  menu.mesh.lookAt(h.x, menu.mesh.position.y, h.z);
+}
+
+const factory = new XRControllerModelFactory();
+const ctrls = [0, 1].map(i => {
+  const c = renderer.xr.getController(i); c.userData = {src:null, prev:[]};
+  c.addEventListener('connected', e => { c.userData.src = e.data; });
+  c.addEventListener('disconnected', () => { c.userData.src = null; });
+  c.addEventListener('selectstart', () => onSelect(c));
+  scene.add(c);
+  const grip = renderer.xr.getControllerGrip(i); grip.add(factory.createControllerModel(grip)); scene.add(grip);
+  // virtual nozzle on the target ray
+  const noz = new THREE.Group();
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.16, 12), M(0x161616)); pipe.rotation.x = -Math.PI/2; pipe.position.z = -0.08; noz.add(pipe);
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.012, 0.04, 12), M(0x2a2a2a)); tip.rotation.x = -Math.PI/2; tip.position.z = -0.18; noz.add(tip);
+  noz.visible = false; c.add(noz); c.userData.noz = noz;
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(), new V3(0, 0, -4)]), new THREE.LineBasicMaterial({color:0xffc20e, transparent:true, opacity:.7}));
+  line.visible = false; c.add(line); c.userData.line = line;
+  return c;
+});
+function nozzleCtrl() {
+  const live = ctrls.filter(c => c.userData.src && c.userData.src.gamepad);
+  return live.find(c => c.userData.src.handedness === 'right') || live[0] || null;
+}
+function ctrlRay(c) { const o = new V3().setFromMatrixPosition(c.matrixWorld); const d = new V3(0, 0, -1).applyQuaternion(c.getWorldQuaternion(tmpQ)); return {o, d}; }
+function buzz(v, ms) { const c = nozzleCtrl(); const h = c && c.userData.src.gamepad.hapticActuators; if (h && h[0]) try { h[0].pulse(v, ms); } catch (e) {} }
+
+// mouse (preview)
+const mouse = new THREE.Vector2(), keys = {};
+let mouseDown = false, menuHold = false;
+function mouseRay() { ray.setFromCamera(mouse, camera); return {o:ray.ray.origin.clone(), d:ray.ray.direction.clone()}; }
+renderer.domElement.addEventListener('pointermove', e => { mouse.set(e.clientX/innerWidth*2 - 1, -(e.clientY/innerHeight)*2 + 1); });
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (renderer.xr.isPresenting) return;
+  mouse.set(e.clientX/innerWidth*2 - 1, -(e.clientY/innerHeight)*2 + 1);
+  const r = mouseRay(), h = menu.hit(r.o, r.d);
+  if (h && h.b) { click(h.b.id); menuHold = true; return; }
+  mouseDown = true; renderer.domElement.setPointerCapture(e.pointerId);
+});
+addEventListener('pointerup', () => { mouseDown = false; menuHold = false; });
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; keys[e.key.toLowerCase()] = true; if (e.key === 'p' || e.key === 'P') pull(); if (e.key === 'b' || e.key === 'B') placeFire(); });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+function onSelect(c) {
+  const r = ctrlRay(c), h = menu.hit(r.o, r.d);
+  if (h && h.b) { menuHold = true; click(h.b.id); }
+}
+function click(id) {
+  if (id === 'prev') start(scIdx - 1);
+  else if (id === 'next' || id === 'go:next') start(scIdx + 1);
+  else if (id === 'go:again') start(scIdx);
+  else if (id === 'place') { placeFire(); placeMenu(); }
+  else if (id === 'evac' || id.startsWith('x:')) choose(id === 'evac' ? 'evac' : id.slice(2));
+}
+
+// ---------------- panel drawing ----------------
+function drawBrief() {
+  const x = menu.x, W = menu.c.width, H = menu.c.height; menu.btns = [];
+  x.clearRect(0, 0, W, H); rr(x, 0, 0, W, H, 34, 'rgba(17,19,23,0.93)');
+  const btn = (id, X, Y, w, h, label, sub, sw) => {
+    const hov = menu.hover === id;
+    rr(x, X, Y, w, h, 16, hov ? '#3a3f46' : '#262a30'); if (hov) { x.lineWidth = 4; x.strokeStyle = '#ffc20e'; x.stroke(); }
+    let tx = X + 22;
+    if (sw) { rr(x, X + 18, Y + 16, 20, h - 32, 6, sw); tx = X + 54; }
+    x.fillStyle = '#eceef0'; x.font = '600 30px system-ui,sans-serif'; x.fillText(label, tx, Y + (sub ? 42 : h/2 + 11));
+    if (sub) { x.fillStyle = '#a8aeb4'; x.font = '24px system-ui,sans-serif'; x.fillText(sub, tx, Y + 74); }
+    menu.btns.push({id, x:X, y:Y, w, h});
+  };
+  btn('prev', 36, 30, 84, 64, '◀'); btn('next', W - 120, 30, 84, 64, '▶');
+  x.fillStyle = '#ffc20e'; x.font = '600 26px system-ui,sans-serif'; x.textAlign = 'center'; x.fillText(`Escenario ${scIdx + 1} de ${SC.length}`, W/2, 56);
+  x.fillStyle = '#ffffff'; x.font = '700 44px system-ui,sans-serif'; x.fillText(sc.t, W/2, 104); x.textAlign = 'left';
+  x.fillStyle = '#c9ced3'; x.font = '27px system-ui,sans-serif'; let y = wrapText(x, sc.d, 40, 156, W - 80, 36);
+  x.fillStyle = '#ffffff'; x.font = '600 30px system-ui,sans-serif'; x.fillText('¿Qué haces? Elige un extintor o evacua.', 40, y + 18);
+  const top = y + 44, bw = (W - 40*2 - 20)/2, bh = 96;
+  EXT.forEach((e, i) => btn('x:' + e.id, 40 + (i%2)*(bw + 20), top + Math.floor(i/2)*(bh + 14), bw, bh, e.name, 'Clase ' + e.cls, e.body));
+  btn('evac', 40, top + 3*(bh + 14), bw, bh, 'Evacuar', 'Alarma, 911, cerrar puerta', '#1f9d55');
+  btn('place', 40 + bw + 20, top + 3*(bh + 14), bw, bh, 'Recolocar fuego', '3.5 m frente a ti');
+  menu.tex.needsUpdate = true;
+}
+function drawDebrief(r, rows, score) {
+  const x = menu.x, W = menu.c.width, H = menu.c.height; menu.btns = [];
+  x.clearRect(0, 0, W, H); rr(x, 0, 0, W, H, 34, 'rgba(17,19,23,0.94)');
+  x.fillStyle = '#c9ced3'; x.font = '600 30px system-ui,sans-serif'; x.fillText(sc.t, 44, 64);
+  x.fillStyle = r.res === 'pass' ? '#4ade80' : r.res === 'safe' ? '#ffc20e' : '#ff6b5e'; x.font = '700 56px system-ui,sans-serif'; x.fillText(`${r.head} · ${score}/100`, 44, 134);
+  x.fillStyle = '#d6dadf'; x.font = '26px system-ui,sans-serif'; let y = wrapText(x, r.why, 44, 186, W - 88, 34);
+  y += 10;
+  for (const [n, v, m] of rows) {
+    x.fillStyle = '#d6dadf'; x.font = '26px system-ui,sans-serif'; x.fillText(n, 44, y + 22);
+    rr(x, 560, y + 8, 260, 14, 7, '#3a3f46'); if (v > 0) rr(x, 560, y + 8, 260*v/m, 14, 7, '#ffc20e');
+    x.textAlign = 'right'; x.fillStyle = '#fff'; x.font = '600 26px system-ui,sans-serif'; x.fillText(`${Math.round(v)}/${m}`, W - 44, y + 24); x.textAlign = 'left';
+    y += 42;
+  }
+  const by = H - 120, bw = (W - 44*2 - 20)/2;
+  for (const [id, label, i] of [['go:next', 'Siguiente escenario', 0], ['go:again', 'Repetir', 1]]) {
+    const X = 44 + i*(bw + 20), hov = menu.hover === id;
+    rr(x, X, by, bw, 84, 16, i ? (hov ? '#3a3f46' : '#262a30') : (hov ? '#ffd54a' : '#ffc20e'));
+    x.fillStyle = i ? '#eceef0' : '#15171a'; x.font = '600 32px system-ui,sans-serif'; x.textAlign = 'center'; x.fillText(label, X + bw/2, by + 53); x.textAlign = 'left';
+    menu.btns.push({id, x:X, y:by, w:bw, h:84});
+  }
+  menu.tex.needsUpdate = true;
+}
+let lastDebrief = null;
+function redrawMenu() { if (st.phase === 'done' && lastDebrief) drawDebrief(...lastDebrief); else drawBrief(); }
+
+function drawHud() {
+  const x = hud.x, W = hud.c.width, H = hud.c.height;
+  x.clearRect(0, 0, W, H); rr(x, 0, 0, W, H, 28, 'rgba(17,19,23,0.88)');
+  x.fillStyle = '#fff'; x.font = '700 36px system-ui,sans-serif'; x.fillText(sc.t, 30, 54);
+  x.fillStyle = '#a8aeb4'; x.font = '26px system-ui,sans-serif'; x.fillText(st.ext ? st.ext.name : '', 30, 92);
+  const done = [st.pin, st.sprayed, st.sprayT > 1.5, st.phase === 'watch' || st.phase === 'done'];
+  const now = done.indexOf(false);
+  'PASS'.split('').forEach((L, i) => {
+    const cx = 52 + i*70, cy = 140;
+    x.beginPath(); x.arc(cx, cy, 24, 0, 7); x.fillStyle = done[i] ? '#1f9d55' : i === now ? '#ffc20e' : '#3a3f46'; x.fill();
+    x.fillStyle = i === now && !done[i] ? '#15171a' : '#fff'; x.font = '700 26px system-ui,sans-serif'; x.textAlign = 'center'; x.fillText(done[i] ? '✓' : L, cx, cy + 9); x.textAlign = 'left';
+  });
+  const bar = (y, label, val, frac, col) => {
+    x.fillStyle = '#c9ced3'; x.font = '24px system-ui,sans-serif'; x.fillText(label, 330, y);
+    x.textAlign = 'right'; x.fillStyle = '#fff'; x.font = '600 24px system-ui,sans-serif'; x.fillText(val, W - 30, y); x.textAlign = 'left';
+    rr(x, 330, y + 12, W - 360, 12, 6, '#3a3f46'); if (frac > 0.01) rr(x, 330, y + 12, (W - 360)*Math.min(1, frac), 12, 6, col);
+  };
+  const [mn, mx] = st.ext ? st.ext.range.map(v => v*FT) : [0, 0];
+  const d = st.dist, good = d >= mn && d <= mx;
+  bar(124, 'Agente', Math.round(st.agent*100) + '%', st.agent, '#ffc20e');
+  bar(186, 'Distancia', `${d.toFixed(1)} m · ${d < mn ? 'muy cerca' : d > mx ? 'muy lejos' : 'bien'}`, Math.max(0, 1 - d/6), good ? '#1f9d55' : '#ffc20e');
+  x.fillStyle = '#8f959b'; x.font = '22px system-ui,sans-serif'; x.fillText(`Rango efectivo ${mn.toFixed(1)}–${mx.toFixed(1)} m`, 330, 244);
+  bar(282, 'Calor', Math.round(st.heat) + '%', st.heat/100, '#e8251a');
+  if (st.msg) { rr(x, 24, 340, W - 48, 106, 18, 'rgba(255,194,14,0.95)'); x.fillStyle = '#15171a'; x.font = '600 30px system-ui,sans-serif'; wrapText(x, st.msg, 44, 382, W - 88, 36); }
+  hud.tex.needsUpdate = true;
+}
+
+// ---------------- reticle ----------------
+const ret = new THREE.Mesh(new THREE.RingGeometry(0.035, 0.05, 32), new THREE.MeshBasicMaterial({color:0xffc20e, side:THREE.DoubleSide, depthTest:false, transparent:true}));
+ret.renderOrder = 11; ret.visible = false; scene.add(ret);
+
+// ---------------- simulation ----------------
+let hudT = 0, buzzT = 0;
+function update(dt) {
+  frameN++;
+  if (renderer.xr.isPresenting && needPlace && frameN > 6) { placeFire(); placeMenu(); needPlace = false; }
+  if (!renderer.xr.isPresenting && previewOn) {
+    const f = headFwd(), sp = 1.6*dt;
+    if (keys['w']) camera.position.addScaledVector(f, sp);
+    if (keys['s']) camera.position.addScaledVector(f, -sp);
+  }
+  if (st.msgT > 0) { st.msgT -= dt; if (st.msgT <= 0) st.msg = ''; }
+
+  // input
+  let P = null, trig = 0;
+  const nc = renderer.xr.isPresenting ? nozzleCtrl() : null;
+  if (renderer.xr.isPresenting) {
+    for (const c of ctrls) {
+      const gp = c.userData.src && c.userData.src.gamepad; c.userData.noz.visible = c === nc && st.phase !== 'brief' && st.phase !== 'done';
+      if (!gp) continue;
+      const b4 = !!(gp.buttons[4] && gp.buttons[4].pressed), b5 = !!(gp.buttons[5] && gp.buttons[5].pressed);
+      if (b4 && !c.userData.prev[4]) pull();
+      if (b5 && !c.userData.prev[5]) { placeFire(); if (menu.mesh.visible) placeMenu(); }
+      c.userData.prev[4] = b4; c.userData.prev[5] = b5;
+      const r = ctrlRay(c), h = menu.hit(r.o, r.d);
+      c.userData.line.visible = !!h || (menu.mesh.visible && c === nc);
+      if (h) { const id = h.b ? h.b.id : null; if (id !== menu.hover) { menu.hover = id; redrawMenu(); } }
+    }
+    if (nc) { P = ctrlRay(nc); trig = nc.userData.src.gamepad.buttons[0] ? nc.userData.src.gamepad.buttons[0].value : 0; }
+  } else if (previewOn) {
+    P = mouseRay(); trig = mouseDown ? 1 : 0;
+    const h = menu.hit(P.o, P.d), id = h && h.b ? h.b.id : null;
+    if (id !== menu.hover) { menu.hover = id; redrawMenu(); }
+  }
+  if (menuHold && trig < 0.05 && !mouseDown) menuHold = false;
+
+  // geometry
+  const head = headPos(), c = fireG.position;
+  const toU = new V3(head.x - c.x, 0, head.z - c.z); st.dist = toU.length(); toU.normalize();
+  const right = new V3().crossVectors(UP, toU);
+  const w = sc.w, baseY = sc.base, fireH = w*(sc.big ? 1.6 : 1.1)*(st.flare ? 1.8 : 1), cw = w/N;
+  const cellPos = k => c.clone().addScaledVector(right, -w/2 + cw*(k + .5)).setY(baseY);
+  ret.visible = false; st.spraying = false;
+
+  const live = st.phase === 'fight' || st.phase === 'watch';
+  if (live) {
+    const x = st.ext, mn = x.range[0]*FT, mx = x.range[1]*FT;
+    const want = trig > 0.08 && !menuHold;
+    const flow = renderer.xr.isPresenting ? Math.min(1, (trig - 0.08)/0.6) : 1; st.flow = want ? flow : 0;
+    if (want && !st.pin) { if (!st.pinMiss) say('No pasa nada: ¡el pasador sigue puesto!', 2.4); st.pinMiss = true; }
+    let inBase = false, inFlame = false, u = 0;
+    if (P) {
+      const den = P.d.dot(toU);
+      if (Math.abs(den) > 1e-4) {
+        const t = c.clone().sub(P.o).dot(toU)/den;
+        if (t > 0) {
+          const pt = P.o.clone().addScaledVector(P.d, t); u = pt.clone().sub(c).dot(right); const h = pt.y;
+          st.aimPt = pt; ret.position.copy(pt); ret.lookAt(head); ret.visible = true;
+          inBase = h >= baseY - 0.1 && h <= baseY + Math.max(0.14, fireH*0.25) && Math.abs(u) < w*0.62;
+          inFlame = !inBase && h > baseY && h < baseY + fireH*1.3 && Math.abs(u) < w*0.62;
+        }
+      }
+    }
+    const spray = want && st.pin && st.agent > 0; st.spraying = spray;
+    if (spray) {
+      st.sprayed = true; st.agent = Math.max(0, st.agent - dt/x.dur*flow); st.sprayT += dt;
+      if (st.fx === 'danger' && !st.flare) { st.flare = true; st.flareT = 0; st.cells = st.cells.map(() => 1); say(sc.big ? '¡El fuego te supera!' : '¡Agente equivocado!', 2); buzz(1, 400); }
+      if (st.dist >= mn && st.dist <= mx) st.okDist += dt;
+      if (inBase) { st.base += dt; if (st.lastU !== null) { const du = u - st.lastU; if (Math.abs(du) > 0.004) { const s = Math.sign(du); if (st.dir && s !== st.dir) st.sweeps++; st.dir = s; } } st.lastU = u; } else st.lastU = null;
+      if (inFlame && Math.random() < dt*0.6) say('Apunta más abajo: a la base, no a las llamas', 1.8);
+      const dn = Math.hypot(P.o.x - c.x, P.o.z - c.z), reach = dn <= mx ? 1 : Math.max(0, 1 - (dn - mx)/1.2);
+      if (dn > mx + 0.3 && Math.random() < dt*0.5) say('Muy lejos: el chorro no llega', 1.8);
+      const eff = flow*(st.fx === 'ok' ? 1 : st.fx === 'weak' ? .4 : 0)*(inBase ? 1 : inFlame ? .12 : 0)*reach, rad = cw*1.7;
+      if (!st.flare) st.cells = st.cells.map((v, k) => { const d = Math.abs((-w/2 + cw*(k + .5)) - u); return d < rad ? Math.max(0, v - 1.25*eff*dt*(1 - d/rad*0.6)) : v; });
+      // spray particles
+      const tip = P.o.clone().addScaledVector(P.d, 0.2), speed = (mx*1.1)/0.6, kind = x.kind;
+      const n = Math.ceil((kind === 'co2' ? 10 : 14)*flow), spread = kind === 'water' ? 0.05 : kind === 'co2' ? 0.22 : 0.12;
+      for (let i = 0; i < n; i++) {
+        const v = P.d.clone().multiplyScalar(speed*(0.85 + Math.random()*0.3)).add(new V3((Math.random() - .5), (Math.random() - .5), (Math.random() - .5)).multiplyScalar(speed*spread));
+        SPRAY.list.push({x:tip.x, y:tip.y, z:tip.z, v, age:0, life:kind === 'co2' ? 0.55 : 0.75, kind});
+      }
+      buzzT += dt; if (buzzT > 0.05) { buzzT = 0; buzz(st.flare ? 1 : 0.25 + 0.5*flow, 60); }
+    } else st.lastU = null;
+
+    const cl = st.cells;
+    st.cells = cl.map((v, k) => {
+      if (v < 0.03 && !st.flare) { const nb = Math.max(cl[k-1] || 0, cl[k+1] || 0); let nv = nb > .4 ? .14*dt*(spray ? .3 : 1) : 0; if (st.fx === 'weak' && Math.random() < dt*.18) nv += .25; return nv > 0 ? Math.min(1, nv + .02) : 0; }
+      return Math.min(1, v + .05*dt*(st.flare ? 8 : 1));
+    });
+    const tot = st.cells.reduce((a, b) => a + b, 0)/N;
+    if (st.dist < mn - 0.15 || st.dist < 0.9) st.heat += dt*(st.dist < 0.9 ? 45 : 22)*tot*(sc.big ? 2 : 1); else st.heat = Math.max(0, st.heat - dt*18);
+    if (st.heat > 40 && Math.random() < dt) say('Demasiado calor: ¡retrocede!', 1.6);
+    if (st.heat >= 100) return finish({res:'fail', head:'Quemado', why:'Te acercaste demasiado. El calor radiante y los rebrotes lastiman antes de tocar las llamas. Empieza a unos 2.5–3 m y acércate solo cuando el fuego se reduzca.'});
+    if (st.flare) { st.flareT += dt; if (st.flareT > 1.6) return finish({res:'fail', head:sc.big ? 'Atrapado' : 'Reacción peligrosa', why:sc.big ? WHY.big : WHY[sc.id + '-' + x.id] || 'Ese agente empeora este fuego.'}); }
+    if (tot === 0) { if (st.phase === 'fight') { st.phase = 'watch'; st.watch = 0; say('Está apagado. Sigue vigilando y retrocede hacia la salida.', 3.2); } st.watch += dt; if (st.watch > 3.2) return finish({res:'pass'}); }
+    else if (st.phase === 'watch') { st.phase = 'fight'; say('¡Se reavivó!', 2); }
+    if (st.agent <= 0 && tot > 0) { st.emptyT += dt; if (st.emptyT > 1.2) return finish({res:'fail', head:'Sin agente', why:st.fx === 'weak' ? WHY.weak[x.id] : 'El extintor está vacío y el fuego sigue. Retírate, sal, cierra la puerta y llama al 911. La próxima vez: apunta a la base, barre y mantente en el rango para no desperdiciar agente.'}); }
+    if (st.fx === 'weak' && st.sprayT > 2 && Math.random() < dt*.3) say('El fuego sigue regresando…', 1.8);
+  }
+
+  // fire particles
+  const metal = sc.id === 'metal';
+  st.cells.forEach((v, k) => {
+    if (v <= 0) return;
+    const p0 = cellPos(k), n = v*(sc.big ? 5 : 3.2)*(st.flare ? 2 : 1);
+    for (let i = 0; i < n; i++) if (Math.random() < .85) {
+      const lat = (Math.random() - .5)*cw*1.4, dep = (Math.random() - .5)*Math.min(0.25, w*0.3);
+      FIRE.list.push({x:p0.x + right.x*lat + toU.x*dep, y:p0.y, z:p0.z + right.z*lat + toU.z*dep, vy:(0.6 + Math.random()*0.9)*(fireH/0.46)*(0.5 + v*0.6), vx:(Math.random() - .5)*0.1, age:0, life:.45 + Math.random()*.45, s:cw*(2.2 + v*1.6)*(st.flare ? 1.4 : 1)});
+    }
+    if (sc.big && Math.random() < dt*25) SMOKE.list.push({x:p0.x, y:p0.y + fireH*0.8, z:p0.z, vy:0.5 + Math.random()*0.4, age:0, life:3 + Math.random()*2, s:0.5});
+  });
+  FIRE.list = FIRE.list.filter(p => { p.age += dt; p.y += p.vy*dt; p.x += p.vx*dt; return p.age < p.life; }).slice(-FIRE.max);
+  FIRE.flush(p => { const u = p.age/p.life, a = 1 - u;
+    let col = metal ? [1, 1, 1] : u < .35 ? [1, .85 - u*.4, .5 - u] : u < .7 ? [1, .55 - (u - .35)*.8, .12] : [.6, .15, .04];
+    return [p.s*(0.55 + a*0.6), [col[0], col[1], col[2], (metal ? .55 : .5)*a*(sc.big ? .5 : 1)]]; });
+  SPRAY.list = SPRAY.list.filter(p => { p.age += dt; p.v.y -= 2.5*dt; p.x += p.v.x*dt; p.y += p.v.y*dt; p.z += p.v.z*dt; if (p.y < 0.02) { p.y = 0.02; p.v.y = 0; p.v.multiplyScalar(0.8); } return p.age < p.life; }).slice(-SPRAY.max);
+  SPRAY.flush(p => { const u = p.age/p.life, col = st.ext ? st.ext.col : [1, 1, 1], big = p.kind === 'co2' ? 0.45 : p.kind === 'water' ? 0.08 : 0.28;
+    return [0.03 + u*big, [col[0], col[1], col[2], (p.kind === 'water' ? .55 : .42)*(1 - u*u)]]; });
+  SMOKE.list = SMOKE.list.filter(p => { p.age += dt; p.y = Math.min(3.1, p.y + p.vy*dt); return p.age < p.life; }).slice(-SMOKE.max);
+  SMOKE.flush(p => { const u = p.age/p.life; return [p.s*(1 + u*3), [.18, .18, .19, .5*(1 - u)]]; });
+
+  const tot = st.cells.reduce((a, b) => a + b, 0)/N;
+  fireLight.position.set(c.x, baseY + fireH*0.4, c.z); fireLight.intensity = tot*(sc.big ? 9 : 4)*(0.85 + Math.random()*0.3);
+
+  // HUD placement and redraw
+  if (hud.mesh.visible) {
+    hud.mesh.position.copy(c).addScaledVector(toU, Math.min(0.8, st.dist*0.3)).addScaledVector(right, -(w/2 + 0.8)).setY(1.45);
+    hud.mesh.lookAt(head.x, 1.45, head.z);
+    hudT += dt; if (hudT > 0.1) { hudT = 0; drawHud(); }
+  }
+}
+
+function finish(r) {
+  st.phase = 'done'; mouseDown = false;
+  let score = r.score; const rows = [];
+  if (st.ext) {
+    const ch = st.fx === 'ok' ? 30 : st.fx === 'weak' ? 10 : 0, pin = st.pin ? (st.pinMiss ? 5 : 10) : 0, t = Math.max(.01, st.sprayT);
+    const dist = 20*st.okDist/t, base = 20*st.base/t, sw = Math.min(10, st.sweeps*4), ag = r.res === 'pass' ? 10*st.agent : 0;
+    rows.push(['Extintor correcto', ch, 30], ['Pasador antes de apretar', pin, 10], ['Distancia segura', dist, 20], ['Apuntar a la base', base, 20], ['Barrido lado a lado', sw, 10], ['Agente sobrante', ag, 10]);
+    score = Math.round(ch + pin + dist + base + sw + ag); if (r.res === 'fail') score = Math.min(score, 40);
+    if (r.res === 'pass') {
+      if (score >= 70) { r.head = 'Fuego apagado'; r.why = 'Buena técnica. En la vida real sigue vigilando, retrocede hacia la salida y reporta el incendio aunque esté apagado.'; }
+      else { r.res = 'safe'; r.head = 'Apagado, con fallas'; r.why = 'Lo apagaste, pero la técnica quedó debajo de 70. Revisa el desglose: apuntar bajo, mantener el rango y barrer completo ahorra agente.'; }
+    }
+  }
+  const tag = r.res === 'pass' ? 'Aprobado' : r.res === 'safe' ? 'Revisar' : 'Reprobado';
+  log.unshift({who:$('#who').value.trim() || '—', sc:sc.t, ch:st.choice, res:tag + ': ' + r.head, score}); logR();
+  hud.mesh.visible = false; lastDebrief = [r, rows, score]; drawDebrief(r, rows, score); menu.mesh.visible = true; placeMenu();
+  buzz(0, 1);
+}
+
+// ---------------- results log ----------------
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+function logR() {
+  try { localStorage.setItem('xrfet-log', JSON.stringify(log.slice(0, 300))); } catch (e) {}
+  $('#logB').innerHTML = log.map(l => `<tr><td>${esc(l.who)}</td><td>${esc(l.sc)}</td><td>${esc(l.ch)}</td><td>${esc(l.res)}</td><td class="n">${esc(l.score)}</td></tr>`).join('');
+  $('#logEmpty').style.display = log.length ? 'none' : '';
+}
+$('#clear').addEventListener('click', () => { log = []; logR(); });
+$('#copy').addEventListener('click', async () => {
+  const t = ['Participante\tEscenario\tDecisión\tResultado\tPuntos', ...log.map(l => [l.who, l.sc, l.ch, l.res, l.score].join('\t'))].join('\n');
+  try { await navigator.clipboard.writeText(t); $('#copy').textContent = 'Copiado'; } catch (e) { $('#copy').textContent = 'No se pudo copiar'; }
+  setTimeout(() => $('#copy').textContent = 'Copiar resultados', 1600);
+});
+
+// ---------------- sessions ----------------
+async function startXR(kind) {
+  try {
+    const s = await navigator.xr.requestSession(kind === 'ar' ? 'immersive-ar' : 'immersive-vr', {requiredFeatures:['local-floor'], optionalFeatures:['bounded-floor', 'hand-tracking']});
+    mode = kind; room.visible = kind !== 'ar'; scene.background = kind === 'ar' ? null : BG;
+    await renderer.xr.setSession(s);
+    $('#start').classList.add('off'); needPlace = true; frameN = 0; start(scIdx);
+    s.addEventListener('end', () => { mode = 'preview'; room.visible = true; scene.background = BG; $('#start').classList.remove('off'); for (const c of ctrls) c.userData.src = null; });
+  } catch (e) { $('#support').textContent = 'No se pudo iniciar: ' + e.message; }
+}
+$('#bAR').addEventListener('click', () => startXR('ar'));
+$('#bVR').addEventListener('click', () => startXR('vr'));
+$('#bPrev').addEventListener('click', () => { previewOn = true; $('#start').classList.add('off'); $('#menuBtn').style.display = 'block'; $('#tip').style.display = 'block'; camera.position.set(0, 1.6, 0); camera.lookAt(0, 1.0, -3.5); fireG.position.set(0, 0, -3.5); start(scIdx); menu.mesh.position.set(0, 1.35, -1.3); menu.mesh.lookAt(0, 1.35, 0); });
+$('#menuBtn').addEventListener('click', () => { previewOn = false; $('#start').classList.remove('off'); $('#menuBtn').style.display = 'none'; $('#tip').style.display = 'none'; });
+(async () => {
+  if (!navigator.xr) { $('#support').textContent = 'Este navegador no tiene WebXR. Abre esta página en el navegador del Meta Quest (con https) para entrar en VR. Aquí puedes usar la vista previa.'; return; }
+  const [ar, vr] = await Promise.all([navigator.xr.isSessionSupported('immersive-ar').catch(() => false), navigator.xr.isSessionSupported('immersive-vr').catch(() => false)]);
+  $('#bAR').disabled = !ar; $('#bVR').disabled = !vr;
+  $('#support').textContent = ar ? 'Listo: realidad mixta disponible.' : vr ? 'Realidad virtual disponible (realidad mixta no soportada aquí).' : 'WebXR no está disponible aquí. En el Quest, la página debe abrirse con https.';
+})();
+
+// ---------------- loop ----------------
+newState(); buildObj(sc); drawBrief(); menu.mesh.position.set(0, 1.35, -1.3); menu.mesh.lookAt(0, 1.35, 0); logR();
+camera.lookAt(0, 1.0, -3.5);
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => { const dt = Math.min(0.05, clock.getDelta()); update(dt); renderer.render(scene, camera); });
+window.__xr = {res:() => lastDebrief && lastDebrief[0].head, st:() => st, click, pull, setMouse:(x, y) => mouse.set(x, y), down:v => { mouseDown = v; }};
+</script>
+</body>
+</html>
